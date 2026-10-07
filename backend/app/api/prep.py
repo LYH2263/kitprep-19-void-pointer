@@ -1,38 +1,58 @@
-import json
-from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
 from sqlalchemy.orm import Session
+
 from app.database import get_db
-from app.models.models import BomLine, Ingredient, KitchenOrder, OrderLine, PrepRun
-from app.services.bom_engine import explode_and_merge, result_to_dict
+from app.services import prep_service as svc
+
 router = APIRouter(prefix="/prep", tags=["prep"])
+
+EMPTY_STATS = {"ingredient_count": 0, "shortage_count": 0, "total_shortage_qty": 0}
+
 
 @router.post("/run")
 def run_prep(order_id: int = 1, db: Session = Depends(get_db)):
-    order = db.get(KitchenOrder, order_id)
-    if not order: raise HTTPException(404, "订单不存在")
-    ols = [{"dish_id": l.dish_id, "portions": l.portions}
-           for l in db.scalars(select(OrderLine).where(OrderLine.order_id == order_id)).all()]
-    bom = [{"dish_id": b.dish_id, "ingredient_id": b.ingredient_id, "qty_per_portion": b.qty_per_portion}
-           for b in db.scalars(select(BomLine)).all()]
-    ings = {i.id: {"code": i.code, "name": i.name, "unit": i.unit, "stock_qty": i.stock_qty}
-            for i in db.scalars(select(Ingredient)).all()}
-    result = result_to_dict(explode_and_merge(ols, bom, ings))
-    result["order"] = {"id": order.id, "code": order.code, "outlet": order.outlet}
-    run = PrepRun(order_id=order_id, created_at=datetime.utcnow(), result_json=json.dumps(result, ensure_ascii=False))
-    db.add(run); db.commit(); db.refresh(run)
-    return {"id": run.id, **result}
+    """生成一张新的有效备料单并预占库存。始终新建，不覆盖任何既有单（含作废单）。"""
+    try:
+        run = svc.create_run(db, order_id)
+    except svc.PrepNotFound as e:
+        raise HTTPException(404, str(e))
+    return svc.serialize(run)
+
 
 @router.get("/latest")
 def latest(order_id: int = 1, db: Session = Depends(get_db)):
-    run = db.scalars(select(PrepRun).where(PrepRun.order_id == order_id).order_by(PrepRun.id.desc())).first()
-    if not run:
-        return run_prep(order_id=order_id, db=db)
-    data = json.loads(run.result_json)
-    return {"id": run.id, **data}
+    """最新"有效"单指针。作废后若无更早有效单则返回 null（不再隐式新建单据）。"""
+    run = svc.get_active_latest(db, order_id)
+    return svc.serialize(run) if run else None
+
 
 @router.get("/shortages")
 def shortages(order_id: int = 1, db: Session = Depends(get_db)):
-    data = latest(order_id=order_id, db=db)
-    return {"order_id": order_id, "shortages": data.get("shortages", []), "stats": data.get("stats", {})}
+    """缺料贴与统计只跟最新有效单走；没有有效单时三处同时为空。"""
+    run = svc.get_active_latest(db, order_id)
+    if not run:
+        return {"order_id": order_id, "run_id": None, "shortages": [], "stats": dict(EMPTY_STATS)}
+    data = svc.serialize(run)
+    return {"order_id": order_id, "run_id": run.id,
+            "shortages": data.get("shortages", []), "stats": data.get("stats", {})}
+
+
+@router.post("/{run_id}/void")
+def void_run(run_id: int, db: Session = Depends(get_db)):
+    """作废指定备料单：只释放本单预占、不动账面结存；成功后指针落到上一张有效单或为空。
+
+    失败（含重复作废）时单据状态、预占与指针全部保持原样。
+    """
+    try:
+        svc.void_run(db, run_id)
+    except svc.PrepNotFound as e:
+        raise HTTPException(404, str(e))
+    except svc.PrepConflict as e:
+        raise HTTPException(409, str(e))
+    except svc.PrepError as e:
+        raise HTTPException(400, str(e))
+    next_run = svc.get_active_latest(db, svc.get_run(db, run_id).order_id)
+    return {
+        "voided_id": run_id,
+        "latest": svc.serialize(next_run) if next_run else None,
+    }

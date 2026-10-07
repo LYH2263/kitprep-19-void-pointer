@@ -165,6 +165,15 @@ th { color: var(--kp-muted); font-weight: 700; font-size: 0.75rem; }
 }
 .btn:hover { filter: brightness(1.06); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-danger {
+  background: var(--kp-bad); color: #f7ecea;
+}
+.kp-actions { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.kp-run-tag { font-size: 0.8rem; color: #e8dfd0; }
+.kp-error { font-size: 0.78rem; color: #ff9d8f; }
+.kp-empty { padding: 0.4rem 0; }
+.kp-empty h2 { border-bottom: none; margin-bottom: 0.3rem; }
+.kp-empty-page strong { color: var(--kp-ink); }
 .muted { color: var(--kp-muted); }
 .stat { font-size: 1.5rem; font-weight: 800; }
 

@@ -12,18 +12,23 @@ class NeedLine:
     stock_qty: float
     shortage: float
 
-def explode_and_merge(
-    order_lines: list[dict],
-    bom_lines: list[dict],
-    ingredients: dict[int, dict],
-) -> list[NeedLine]:
-    """order_lines: dish_id, portions; bom_lines: dish_id, ingredient_id, qty_per_portion."""
+def merge_needs(order_lines: list[dict], bom_lines: list[dict]) -> dict[int, float]:
+    """订单行 × BOM 单耗，合并出每个原料的毛需求。与库存无关。"""
     need: dict[int, float] = {}
     for ol in order_lines:
         for bl in bom_lines:
             if bl["dish_id"] != ol["dish_id"]:
                 continue
             need[bl["ingredient_id"]] = need.get(bl["ingredient_id"], 0.0) + ol["portions"] * bl["qty_per_portion"]
+    return need
+
+def explode_and_merge(
+    order_lines: list[dict],
+    bom_lines: list[dict],
+    ingredients: dict[int, dict],
+) -> list[NeedLine]:
+    """order_lines: dish_id, portions; bom_lines: dish_id, ingredient_id, qty_per_portion."""
+    need = merge_needs(order_lines, bom_lines)
     lines: list[NeedLine] = []
     for iid, qty in sorted(need.items()):
         ing = ingredients[iid]
